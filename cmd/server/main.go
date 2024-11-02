@@ -1,23 +1,60 @@
 package main
 
 import (
-	"os"
+	"log"
+	"time"
 
+	"urlshortener/config"
+	"urlshortener/internal/app/services"
+	"urlshortener/internal/handler"
+	"urlshortener/internal/repository"
 	"urlshortener/pkg/logger"
 
 	"github.com/gin-gonic/gin"
 )
 
 func main() {
-	log := logger.New("info")
-	router := gin.Default()
-
-	port := os.Getenv("PORT")
-    if port == "" {
-        port = "8080" // Default to port 8080 if not set
+    cfg, err := config.LoadConfig()
+    if err != nil {
+        log.Fatalf("failed to load config: %v", err)
     }
-    log.Infof("Starting server on port %s", "8080")
+
+    appLog := logger.New(cfg.LogLevel)
+
+    // permanent repo: urlRepo
+    db, err := repository.NewPostgresDB(cfg.DatabaseURL)
+    if err != nil {
+        appLog.Fatalf("failed to connect to PostgreSQL: %v", err)
+    }
+    defer func() {
+        sqlDB, _ := db.DB()
+        sqlDB.Close()
+    }()
+
+    urlRepo := repository.NewURLRepository(db)
+
+    // cache repo: cacheRepo
+    cache := repository.NewRedisClient(cfg.RedisAddress, cfg.RedisPassword, cfg.RedisDB)
+    defer cache.Close()
+
+    cacheRepo := repository.NewCacheRepository(cache)
+
+    urlService := services.NewURLService(urlRepo, cacheRepo, 24*time.Hour)
+
+    // handlers
+    urlHandler := handler.NewURLHandler(urlService)
+    analyticsHandler := handler.NewAnalyticsHandler(urlService)
+
+    // server
+    router := gin.Default()
+    port := cfg.Port
+    
+    router.POST("/shorten", urlHandler.ShortenURLHandler)
+    router.GET("/:shortCode", urlHandler.RedirectHandler)
+    router.GET("/analytics/:shortCode", analyticsHandler.GetClickStatsHandler)
+
+    appLog.Infof("Starting server on port %s", port)
     if err := router.Run(":" + port); err != nil {
-        log.Fatalf("failed to start server: %v", err)
+        appLog.Fatalf("failed to start server: %v", err)
     }
 }
