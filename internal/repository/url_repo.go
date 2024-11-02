@@ -29,6 +29,12 @@ func NewPostgresDB(dsn string) (*gorm.DB, error) {
     }
 
 	log.Println("Connected to PostgreSQL")
+    
+    if err := db.AutoMigrate(&model.URL{}); err != nil {
+        return nil, err
+    }
+    log.Println("Database migrated successfully")
+
     return db, nil
 }
 
